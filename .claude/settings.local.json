@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p \"/Users/malekhassan/Desktop/finance wizz/backend/src/db\" \"/Users/malekhassan/Desktop/finance wizz/backend/src/routes\" \"/Users/malekhassan/Desktop/finance wizz/backend/src/services\")",
+      "Bash(mkdir -p \"/Users/malekhassan/Desktop/finance wizz/frontend/src/api\" \"/Users/malekhassan/Desktop/finance wizz/frontend/src/components/Layout\" \"/Users/malekhassan/Desktop/finance wizz/frontend/src/components/MindMap\" \"/Users/malekhassan/Desktop/finance wizz/frontend/src/components/Purchases\" \"/Users/malekhassan/Desktop/finance wizz/frontend/src/components/BankUpload\" \"/Users/malekhassan/Desktop/finance wizz/frontend/src/components/Insights\")",
+      "Bash(npm install:)",
+      "Bash(npm install:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx vite:*)",
+      "Bash(brew services:*)",
+      "Bash(git --version)",
+      "Bash(gh --version)",
+      "Bash(gh auth:*)",
+      "Bash(gh api:*)",
+      "Bash(npm run:*)",
+      "Bash(gh repo:*)"
+    ]
+  }
+}

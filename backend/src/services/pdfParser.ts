@@ -1,4 +1,5 @@
 import pdfParse from 'pdf-parse';
+import { claudeParsePDF } from './claudeClient';
 
 interface ParsedTransaction {
   id: string;
@@ -6,139 +7,230 @@ interface ParsedTransaction {
   merchant: string;
   amount: number;
   type: 'INCOME' | 'EXPENSE';
-}
-
-export async function parsePDF(buffer: Buffer): Promise<ParsedTransaction[]> {
-  const data = await pdfParse(buffer);
-  return extractTransactions(data.text);
+  transactionType?: string;
 }
 
 function generateId(): string {
-  return Math.random().toString(36).substr(2, 9) + Date.now().toString(36);
+  return Math.random().toString(36).substring(2, 11) + Date.now().toString(36);
 }
 
-function parseGermanAmount(amountStr: string): number {
-  // Handle German number format: 1.234,56 -> 1234.56
-  return parseFloat(amountStr.replace(/\./g, '').replace(',', '.'));
+function parseGermanAmount(str: string): number {
+  const cleaned = str.replace(/^-/, '').trim();
+  return parseFloat(cleaned.replace(/\./g, '').replace(',', '.'));
 }
 
-function extractTransactions(text: string): ParsedTransaction[] {
-  const lines = text.split('\n').filter(l => l.trim().length > 0);
+// ─── Layer 1: Sparkasse-specific regex parser ─────────────────────────────────
+
+// Line starts with DD.MM.YYYY immediately followed by the transaction type
+const TRANSACTION_START = /^(\d{2}\.\d{2}\.\d{4})(.*)/;
+
+// Amount line: 8+ leading spaces, optional minus, German number format
+const AMOUNT_LINE = /^\s{8,}(-?\d{1,3}(?:\.\d{3})*,\d{2})\s*$/;
+
+const SKIP_PATTERNS = [
+  /^Kontostand/i,
+  /^Sparkasse\s+Aachen/i,
+  /^Friedrich-Wilhelm/i,
+  /^Anstalt des/i,
+  /^Sparkassen-Finanzgruppe/i,
+  /^Vorstand:/i,
+  /^HRA \d+/i,
+  /^Telefon \+/i,
+  /^www\./i,
+  /^info@/i,
+  /^SWIFT-Adresse/i,
+  /^BLZ:/i,
+  /^USt-IdNr/i,
+  /^Seite \d+/i,
+  /^Kontoauszug \d+/i,
+  /^Privatgirokonto/i,
+  /^DatumErl/i,
+  /^Betrag Soll/i,
+  /^Herrn?$/i,
+  /^S\s*$/,
+];
+
+function shouldSkip(line: string): boolean {
+  return SKIP_PATTERNS.some(p => p.test(line.trim()));
+}
+
+function extractMerchant(descLines: string[], transactionType: string): string {
+  const typeLower = transactionType.toLowerCase();
+
+  if (typeLower.includes('bargeldeinzahlung')) return 'Bargeldeinzahlung';
+  if (typeLower.includes('entgeltabrechnung')) return 'Sparkasse Kontoführung';
+  if (typeLower.includes('abrechnung')) return 'Sparkasse Abrechnung';
+  if (typeLower.includes('zinsen')) return 'Sparkasse Zinsen';
+
+  if (descLines.length === 0) return transactionType || 'Unknown';
+
+  if (descLines.some(l => l.includes('ovpay.nl') || l.includes('Stationsplein'))) {
+    return 'OV-Pay (NS)';
+  }
+
+  let raw = descLines[0];
+  raw = raw.replace(/^LS\s+/, '');
+  const beforeSlash = raw.split('/')[0].trim();
+  const firstLineStartsWithSlash = raw.trimStart().startsWith('/');
+  let merchantBase = (!firstLineStartsWithSlash && beforeSlash.length >= 3)
+    ? beforeSlash
+    : (descLines[1]?.split('/')[0].trim() ?? beforeSlash);
+
+  let merchant = merchantBase
+    .replace(/Kd-Nr\.?:?\s*[\d\s,]+/gi, '')
+    .replace(/Rg-Nr\.?:?\s*[\d\s\/]+/gi, '')
+    .replace(/\s*-\s*RN:.*$/gi, '')
+    .replace(/[A-Z0-9]{16,}/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+
+  if (typeLower.includes('gutschrift')) {
+    const nameMatch = merchant.match(/^([A-ZÄÖÜ][A-ZÄÖÜ\s\-\.]*?)(?=\s+[A-ZÄÖÜ][a-zäöüß]|$)/);
+    if (nameMatch && nameMatch[1].trim().length > 2) merchant = nameMatch[1].trim();
+  }
+
+  if (merchant.length < 3) {
+    merchant = raw.replace(/[A-Z0-9]{16,}/g, '').replace(/\s{2,}/g, ' ').trim().substring(0, 80);
+  }
+
+  return merchant.substring(0, 255) || 'Unknown';
+}
+
+function extractSparkasse(text: string): ParsedTransaction[] {
+  const lines = text.split('\n');
   const transactions: ParsedTransaction[] = [];
 
-  // German date pattern: DD.MM.YYYY or DD/MM/YYYY
-  const datePattern = /\b(\d{2}[.\/]\d{2}[.\/]\d{4})\b/;
-  // German amount pattern: 1.234,56 or 1234,56 or -1.234,56
-  const amountPattern = /(-?\d{1,3}(?:\.\d{3})*,\d{2}|-?\d+,\d{2})\s*(EUR|€)?/;
+  interface Block {
+    dateStr: string;
+    transactionType: string;
+    descLines: string[];
+    amountStr: string;
+  }
 
-  for (const line of lines) {
-    const dateMatch = line.match(datePattern);
-    const amountMatches = [...line.matchAll(new RegExp(amountPattern.source, 'g'))];
+  let current: Block | null = null;
 
-    if (!dateMatch || amountMatches.length === 0) continue;
+  const finaliseBlock = (block: Block) => {
+    if (!block.amountStr) return;
 
-    // Use last amount match (typically the transaction amount in bank statements)
-    const lastAmountMatch = amountMatches[amountMatches.length - 1];
-    const amountStr = lastAmountMatch[1];
-    const amount = parseGermanAmount(amountStr);
-
-    if (isNaN(amount)) continue;
-
-    // Parse date
-    const dateStr = dateMatch[1].replace(/\//g, '.');
-    const parts = dateStr.split('.');
-    if (parts.length !== 3) continue;
-
-    const [day, month, year] = parts;
+    const [day, month, year] = block.dateStr.split('.');
     const date = new Date(`${year}-${month}-${day}`);
-    if (isNaN(date.getTime())) continue;
+    if (isNaN(date.getTime())) return;
 
-    // Extract merchant name (text between date and amount)
-    const dateEnd = line.indexOf(dateMatch[1]) + dateMatch[1].length;
-    const amountStart = line.lastIndexOf(lastAmountMatch[1]);
-    let merchant = line.substring(dateEnd, amountStart).trim();
+    const isNegative = block.amountStr.startsWith('-');
+    const amount = parseGermanAmount(block.amountStr);
+    if (isNaN(amount) || amount <= 0) return;
 
-    // Clean up merchant name
-    merchant = merchant
-      .replace(/\s+/g, ' ')
-      .replace(/[^\w\s\-&./äöüÄÖÜß]/g, '')
-      .trim();
-
-    if (!merchant || merchant.length < 2) {
-      // Try to extract any meaningful word before the amount
-      const words = line.split(/\s+/).filter(w => w.length > 2 && !w.match(/^\d/));
-      if (words.length > 0) {
-        merchant = words.slice(0, 3).join(' ');
-      } else {
-        merchant = 'Unknown';
-      }
-    }
-
-    transactions.push({
-      id: generateId(),
-      date,
-      merchant: merchant.substring(0, 255),
-      amount: Math.abs(amount),
-      type: amount < 0 ? 'EXPENSE' : 'INCOME'
-    });
-  }
-
-  // If standard pattern failed, try a more lenient approach
-  if (transactions.length === 0) {
-    return extractTransactionsLenient(text);
-  }
-
-  return transactions;
-}
-
-function extractTransactionsLenient(text: string): ParsedTransaction[] {
-  const transactions: ParsedTransaction[] = [];
-  const lines = text.split('\n').filter(l => l.trim().length > 0);
-
-  // Look for any line with a date-like pattern and a number
-  const looseDatePattern = /(\d{1,2}[\.\/-]\d{1,2}[\.\/-]\d{2,4})/;
-  const looseAmountPattern = /(\d+[,\.]\d{2})/;
-
-  for (const line of lines) {
-    const dateMatch = line.match(looseDatePattern);
-    const amountMatch = line.match(looseAmountPattern);
-
-    if (!dateMatch || !amountMatch) continue;
-
-    const amount = parseGermanAmount(amountMatch[1].replace('.', ',').includes(',')
-      ? amountMatch[1]
-      : amountMatch[1] + ',00');
-
-    if (isNaN(amount) || amount <= 0) continue;
-
-    // Try to parse date
-    const dateParts = dateMatch[1].split(/[\.\/-]/);
-    if (dateParts.length < 3) continue;
-
-    let date: Date;
-    const year = dateParts[2].length === 2 ? `20${dateParts[2]}` : dateParts[2];
-    date = new Date(`${year}-${dateParts[1].padStart(2, '0')}-${dateParts[0].padStart(2, '0')}`);
-
-    if (isNaN(date.getTime())) continue;
-
-    const merchant = line
-      .replace(dateMatch[1], '')
-      .replace(amountMatch[1], '')
-      .replace(/EUR|€|\+|-/g, '')
-      .trim()
-      .replace(/\s+/g, ' ')
-      .substring(0, 100) || 'Unknown';
-
-    const isNegative = line.includes('-') && line.indexOf('-') < line.indexOf(amountMatch[1]);
+    const cleanType = block.transactionType.replace(/\s*\/\s*Wert:.*$/i, '').trim();
+    const merchant = extractMerchant(block.descLines, cleanType);
 
     transactions.push({
       id: generateId(),
       date,
       merchant,
       amount,
-      type: isNegative ? 'EXPENSE' : 'INCOME'
+      type: isNegative ? 'EXPENSE' : 'INCOME',
+      transactionType: cleanType || undefined
     });
+  };
+
+  for (const line of lines) {
+    if (shouldSkip(line)) continue;
+
+    const startMatch = line.match(TRANSACTION_START);
+    const amountMatch = line.match(AMOUNT_LINE);
+
+    if (startMatch) {
+      if (current) finaliseBlock(current);
+      current = {
+        dateStr: startMatch[1],
+        transactionType: startMatch[2].trim(),
+        descLines: [],
+        amountStr: ''
+      };
+    } else if (amountMatch && current) {
+      current.amountStr = amountMatch[1];
+      finaliseBlock(current);
+      current = null;
+    } else if (current && line.trim().length > 0) {
+      current.descLines.push(line.trim());
+    }
   }
 
+  if (current) finaliseBlock(current);
+
   return transactions;
+}
+
+// ─── Layer 2: Claude native PDF parsing (any bank format) ─────────────────────
+
+async function extractWithClaude(buffer: Buffer): Promise<ParsedTransaction[]> {
+  const prompt = `You are a bank statement parser. Extract ALL transactions from this bank statement PDF.
+
+For each transaction identify:
+- date (format: YYYY-MM-DD)
+- merchant (the payee/sender name, cleaned up — no reference codes or long alphanumeric strings)
+- amount (always positive number, no currency symbol)
+- type: "EXPENSE" if money left the account, "INCOME" if money came in
+- transactionType (the transaction method: e.g. "Lastschrift", "Überweisung", "Gutschrift", "Kartenzahlung", etc.)
+
+Return ONLY valid JSON, no explanation:
+{"transactions":[{"date":"YYYY-MM-DD","merchant":"string","amount":0.00,"type":"EXPENSE","transactionType":"string"}]}`;
+
+  const responseText = await claudeParsePDF(buffer, prompt);
+  const raw = responseText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+
+  let parsed: any;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    const match = raw.match(/\{[\s\S]*\}/);
+    if (!match) throw new Error('No JSON in Claude response');
+    parsed = JSON.parse(match[0]);
+  }
+
+  const items: any[] = Array.isArray(parsed) ? parsed : (parsed.transactions ?? []);
+  if (!Array.isArray(items) || items.length === 0) throw new Error('No transactions in Claude response');
+
+  return items
+    .filter(item => item.date && item.merchant && item.amount != null)
+    .map(item => {
+      const date = new Date(item.date);
+      if (isNaN(date.getTime())) return null;
+      const amount = Math.abs(parseFloat(item.amount));
+      if (isNaN(amount) || amount <= 0) return null;
+      return {
+        id: generateId(),
+        date,
+        merchant: String(item.merchant || 'Unknown').substring(0, 255).trim() || 'Unknown',
+        amount,
+        type: item.type === 'INCOME' ? 'INCOME' : 'EXPENSE',
+        transactionType: item.transactionType || undefined
+      } as ParsedTransaction;
+    })
+    .filter((t): t is ParsedTransaction => t !== null);
+}
+
+// ─── Entry point ─────────────────────────────────────────────────────────────
+
+export async function parsePDF(buffer: Buffer): Promise<ParsedTransaction[]> {
+  // Layer 1: try Sparkasse-specific regex (fast, free, accurate for Sparkasse)
+  try {
+    const data = await pdfParse(buffer);
+    if (data.text && data.text.trim().length > 20) {
+      const sparkasseResults = extractSparkasse(data.text);
+      if (sparkasseResults.length > 0) {
+        console.log(`[pdfParser] Sparkasse regex extracted ${sparkasseResults.length} transactions`);
+        return sparkasseResults;
+      }
+      console.log('[pdfParser] Sparkasse regex found nothing — falling back to Claude');
+    }
+  } catch (err) {
+    console.error('[pdfParser] pdf-parse failed:', err);
+  }
+
+  // Layer 2: Claude native PDF understanding (works for any bank)
+  console.log('[pdfParser] Sending PDF to Claude for extraction...');
+  const claudeResults = await extractWithClaude(buffer);
+  console.log(`[pdfParser] Claude extracted ${claudeResults.length} transactions`);
+  return claudeResults;
 }

@@ -37,6 +37,7 @@ export interface BankTransaction {
   isRecurring: boolean;
   recurringFrequency: 'MONTHLY' | 'WEEKLY' | 'YEARLY' | null;
   confidenceScore?: number;
+  aiPending?: boolean;
 }
 
 export interface InsightsSummary {

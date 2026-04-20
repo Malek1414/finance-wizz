@@ -80,6 +80,9 @@ export const bankApi = {
   updateTransaction: async (id: string, payload: Partial<BankTransaction>): Promise<BankTransaction> => {
     const { data } = await api.put(`/bank/transactions/${id}`, payload);
     return data;
+  },
+  clearTransactions: async (): Promise<void> => {
+    await api.delete('/bank/transactions');
   }
 };
 

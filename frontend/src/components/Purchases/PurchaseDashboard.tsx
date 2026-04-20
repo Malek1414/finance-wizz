@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { motion } from 'framer-motion';
 import { purchasesApi } from '../../api/client';
 import { PurchaseItem } from '../../types';
 import PurchaseCard from './PurchaseCard';
 import AddPurchaseModal from './AddPurchaseModal';
-import { Plus, ShoppingBag, Filter, Search, RefreshCw } from 'lucide-react';
+import { Plus, ShoppingBag, Filter, Search } from 'lucide-react';
+import { B, grad } from '../../design';
 
 const CATEGORIES = ['ALL', 'SPORTS', 'CLOTHING', 'ACCESSORIES', 'SUPPLEMENTS'] as const;
 const STATUSES = ['ALL', 'WISHLIST', 'PLANNED', 'PURCHASED'] as const;
@@ -12,6 +14,16 @@ const STATUSES = ['ALL', 'WISHLIST', 'PLANNED', 'PURCHASED'] as const;
 function formatEuro(value: number): string {
   return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(value);
 }
+
+const containerVariants = {
+  hidden: {},
+  show: { transition: { staggerChildren: 0.06 } },
+};
+
+const cardVariants = {
+  hidden: { opacity: 0, y: 20 },
+  show: { opacity: 1, y: 0, transition: { duration: 0.35, ease: [0.25, 0.1, 0.25, 1] as const } },
+};
 
 export default function PurchaseDashboard() {
   const queryClient = useQueryClient();
@@ -23,26 +35,25 @@ export default function PurchaseDashboard() {
 
   const { data: purchases = [], isLoading } = useQuery({
     queryKey: ['purchases'],
-    queryFn: () => purchasesApi.getAll()
+    queryFn: () => purchasesApi.getAll(),
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => purchasesApi.delete(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['purchases'] })
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['purchases'] }),
   });
 
   const refreshPriceMutation = useMutation({
     mutationFn: (id: string) => purchasesApi.refreshPrice(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['purchases'] })
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['purchases'] }),
   });
 
   const updateStatusMutation = useMutation({
     mutationFn: ({ id, status }: { id: string; status: string }) =>
       purchasesApi.update(id, { status: status as PurchaseItem['status'] }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['purchases'] })
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['purchases'] }),
   });
 
-  // Filter purchases
   const filtered = purchases.filter(p => {
     if (filterCategory !== 'ALL' && p.category !== filterCategory) return false;
     if (filterStatus !== 'ALL' && p.status !== filterStatus) return false;
@@ -51,7 +62,6 @@ export default function PurchaseDashboard() {
     return true;
   });
 
-  // Stats
   const totalWishlist = purchases
     .filter(p => p.status !== 'PURCHASED')
     .reduce((sum, p) => sum + (p.targetPrice || p.estimatedPrice || 0), 0);
@@ -63,116 +73,166 @@ export default function PurchaseDashboard() {
   const highPriority = purchases.filter(p => p.priority === 'HIGH' && p.status !== 'PURCHASED').length;
 
   return (
-    <div className="h-full flex flex-col">
-      {/* Header */}
-      <div className="px-6 py-4 border-b border-slate-700/30">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h2 className="text-lg font-semibold text-slate-100">Purchase Tracker</h2>
-            <p className="text-xs text-slate-500">{purchases.length} items tracked</p>
-          </div>
-          <button
-            onClick={() => setShowAdd(true)}
-            className="btn-primary flex items-center gap-2"
+    <div style={{ padding: '32px 32px 64px', maxWidth: 1200, margin: '0 auto' }}>
+
+      {/* Page heading + add button */}
+      <motion.div
+        initial={{ opacity: 0, y: -10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.35 }}
+        style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 28 }}
+      >
+        <div>
+          <h2
+            className="iridescent-text"
+            style={{ fontSize: 28, fontWeight: 800, letterSpacing: '-0.03em', margin: 0, lineHeight: 1 }}
           >
-            <Plus className="w-4 h-4" />
-            Add Item
-          </button>
+            Purchase Tracker
+          </h2>
+          <p style={{ fontSize: 13, color: B.textMute, marginTop: 8, margin: '8px 0 0' }}>
+            {purchases.length} items tracked
+          </p>
         </div>
+        <button
+          onClick={() => setShowAdd(true)}
+          className="btn-primary"
+          style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+        >
+          <Plus style={{ width: 16, height: 16 }} />
+          Add Item
+        </button>
+      </motion.div>
 
-        {/* Stats row */}
-        <div className="grid grid-cols-3 gap-3 mb-4">
-          <div className="glass-card p-3 text-center border-sky-500/10 bg-sky-500/5">
-            <div className="text-lg font-bold text-sky-400">{formatEuro(totalWishlist)}</div>
-            <div className="text-xs text-slate-500 mt-0.5 uppercase tracking-wide">Wishlist</div>
-          </div>
-          <div className="glass-card p-3 text-center border-emerald-500/10 bg-emerald-500/5">
-            <div className="text-lg font-bold text-emerald-400">{formatEuro(totalPurchased)}</div>
-            <div className="text-xs text-slate-500 mt-0.5 uppercase tracking-wide">Spent</div>
-          </div>
-          <div className="glass-card p-3 text-center border-rose-500/10 bg-rose-500/5">
-            <div className="text-lg font-bold text-rose-400">{highPriority}</div>
-            <div className="text-xs text-slate-500 mt-0.5 uppercase tracking-wide">High Priority</div>
-          </div>
-        </div>
-
-        {/* Filters */}
-        <div className="flex items-center gap-3 flex-wrap">
-          <div className="relative flex-1 min-w-32">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-            <input
-              type="text"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              placeholder="Search items..."
-              className="input-field w-full pl-9 py-1.5 text-sm"
-            />
-          </div>
-
-          <div className="flex items-center gap-1.5">
-            <Filter className="w-4 h-4 text-slate-400" />
-            <select
-              value={filterCategory}
-              onChange={e => setFilterCategory(e.target.value)}
-              className="select-field py-1.5 text-sm"
+      {/* Stat pills */}
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3, delay: 0.06 }}
+        style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14, marginBottom: 28 }}
+      >
+        {[
+          { label: 'Wishlist', value: formatEuro(totalWishlist), gradient: grad.aurora, glow: B.aurora },
+          { label: 'Spent', value: formatEuro(totalPurchased), gradient: grad.income, glow: B.mint },
+          { label: 'High Priority', value: String(highPriority), gradient: grad.rose, glow: B.rose },
+        ].map(stat => (
+          <div
+            key={stat.label}
+            style={{
+              padding: '18px 20px',
+              borderRadius: 18,
+              background: 'rgba(255,255,255,0.04)',
+              backdropFilter: 'blur(40px)',
+              border: '1px solid rgba(255,255,255,0.07)',
+              textAlign: 'center',
+            }}
+          >
+            <p
+              style={{
+                fontSize: 22,
+                fontWeight: 800,
+                letterSpacing: '-0.02em',
+                background: stat.gradient,
+                WebkitBackgroundClip: 'text',
+                WebkitTextFillColor: 'transparent',
+                backgroundClip: 'text',
+                margin: 0,
+                lineHeight: 1,
+              }}
             >
-              {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
+              {stat.value}
+            </p>
+            <p style={{ fontSize: 11, color: B.textMute, textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 6, margin: '6px 0 0' }}>
+              {stat.label}
+            </p>
           </div>
+        ))}
+      </motion.div>
 
+      {/* Filters */}
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3, delay: 0.12 }}
+        style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 28, flexWrap: 'wrap' }}
+      >
+        {/* Search */}
+        <div style={{ position: 'relative', flex: 1, minWidth: 180 }}>
+          <Search style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', width: 14, height: 14, color: B.textMute }} />
+          <input
+            type="text"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search items..."
+            className="input-field"
+            style={{ paddingLeft: 36, fontSize: 13 }}
+          />
+        </div>
+
+        {/* Category filter */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Filter style={{ width: 14, height: 14, color: B.textMute }} />
           <select
-            value={filterStatus}
-            onChange={e => setFilterStatus(e.target.value)}
-            className="select-field py-1.5 text-sm"
+            value={filterCategory}
+            onChange={e => setFilterCategory(e.target.value)}
+            className="select-field"
+            style={{ fontSize: 13 }}
           >
-            {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+            {CATEGORIES.map(c => <option key={c} value={c} style={{ background: 'oklch(14% 0.012 265)' }}>{c}</option>)}
           </select>
         </div>
-      </div>
+
+        {/* Status filter */}
+        <select
+          value={filterStatus}
+          onChange={e => setFilterStatus(e.target.value)}
+          className="select-field"
+          style={{ fontSize: 13 }}
+        >
+          {STATUSES.map(s => <option key={s} value={s} style={{ background: 'oklch(14% 0.012 265)' }}>{s}</option>)}
+        </select>
+      </motion.div>
 
       {/* Content */}
-      <div className="flex-1 overflow-auto p-6">
-        {isLoading ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <div key={i} className="glass-card p-4 flex flex-col gap-3">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex-1 space-y-2">
-                    <div className="flex gap-1.5">
-                      <div className="skeleton h-5 w-20 rounded-full" />
-                      <div className="skeleton h-5 w-16 rounded-full" />
-                    </div>
-                    <div className="skeleton h-4 w-3/4" />
-                    <div className="skeleton h-3 w-1/2" />
-                  </div>
-                  <div className="skeleton h-5 w-12 rounded-full" />
-                </div>
-                <div className="skeleton h-20 w-full rounded-lg" />
-                <div className="skeleton h-8 w-full rounded-lg" />
-              </div>
-            ))}
+      {isLoading ? (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="skeleton" style={{ height: 200, borderRadius: 20 }} />
+          ))}
+        </div>
+      ) : filtered.length === 0 ? (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          style={{
+            display: 'flex', flexDirection: 'column', alignItems: 'center',
+            justifyContent: 'center', padding: '64px 32px', gap: 16, textAlign: 'center',
+            borderRadius: 24, background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)',
+          }}
+        >
+          <ShoppingBag style={{ width: 48, height: 48, color: B.textMute }} />
+          <div>
+            <p style={{ color: B.textDim, fontWeight: 600, fontSize: 15, margin: 0 }}>No items found</p>
+            <p style={{ color: B.textMute, fontSize: 13, marginTop: 6, margin: '6px 0 0' }}>
+              {purchases.length === 0 ? 'Add your first purchase item' : 'Try adjusting your filters'}
+            </p>
           </div>
-        ) : filtered.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-48 gap-4">
-            <ShoppingBag className="w-12 h-12 text-slate-600" />
-            <div className="text-center">
-              <p className="text-slate-400 font-medium">No items found</p>
-              <p className="text-slate-500 text-sm mt-1">
-                {purchases.length === 0 ? 'Add your first purchase item' : 'Try adjusting your filters'}
-              </p>
-            </div>
-            {purchases.length === 0 && (
-              <button onClick={() => setShowAdd(true)} className="btn-primary flex items-center gap-2">
-                <Plus className="w-4 h-4" />
-                Add First Item
-              </button>
-            )}
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-            {filtered.map(item => (
+          {purchases.length === 0 && (
+            <button onClick={() => setShowAdd(true)} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+              <Plus style={{ width: 16, height: 16 }} />
+              Add First Item
+            </button>
+          )}
+        </motion.div>
+      ) : (
+        <motion.div
+          style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}
+          variants={containerVariants}
+          initial="hidden"
+          animate="show"
+        >
+          {filtered.map(item => (
+            <motion.div key={item.id} variants={cardVariants}>
               <PurchaseCard
-                key={item.id}
                 item={item}
                 onEdit={() => setEditItem(item)}
                 onDelete={() => {
@@ -184,10 +244,10 @@ export default function PurchaseDashboard() {
                 onStatusChange={(status) => updateStatusMutation.mutate({ id: item.id, status })}
                 isRefreshing={refreshPriceMutation.isPending}
               />
-            ))}
-          </div>
-        )}
-      </div>
+            </motion.div>
+          ))}
+        </motion.div>
+      )}
 
       {/* Add/Edit Modal */}
       {(showAdd || editItem) && (

@@ -45,6 +45,7 @@ export interface RawTransaction {
   merchant: string;
   amount: number;
   type: 'INCOME' | 'EXPENSE';
+  transactionType?: string;
 }
 
 export interface MerchantCategory {

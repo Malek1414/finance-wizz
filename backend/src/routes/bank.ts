@@ -1,8 +1,17 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import multer from 'multer';
 import pool from '../db/client';
 import { parsePDF } from '../services/pdfParser';
-import { categorizeTransactions } from '../services/aiCategorization';
+import { categorizeTransactions, applyKeywordRules } from '../services/aiCategorization';
+import { RawTransaction } from '../types';
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface ParsedRequest extends Request {
+  parsedTransactions: RawTransaction[];
+}
+
+// ─── Setup ────────────────────────────────────────────────────────────────────
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -23,62 +32,137 @@ function mapRow(row: any) {
   };
 }
 
-// POST /api/bank/upload - parse PDF and return AI-categorized transactions preview
-router.post('/upload', upload.single('file'), async (req: Request, res: Response) => {
+function mergeWithCategories(rawTransactions: RawTransaction[], categorized: any[]) {
+  const categorizedMap = new Map(categorized.map((c: any) => [c.id, c]));
+  return rawTransactions.map(t => {
+    const aiData = categorizedMap.get(t.id) || {};
+    return {
+      ...t,
+      autoCategory: aiData.category || (t.type === 'INCOME' ? 'INCOME' : 'VARIABLE_SPENDING'),
+      userCategory: aiData.category || (t.type === 'INCOME' ? 'INCOME' : 'VARIABLE_SPENDING'),
+      isRecurring: aiData.isRecurring || false,
+      recurringFrequency: aiData.recurringFrequency || null,
+      confidenceScore: aiData.confidence || 0.5
+    };
+  });
+}
+
+// ─── Middleware ───────────────────────────────────────────────────────────────
+
+// parsePDFMiddleware runs after multer — parses the uploaded PDF and attaches
+// the raw transactions to req.parsedTransactions before the route handler fires.
+async function parsePDFMiddleware(req: Request, _res: Response, next: NextFunction) {
   if (!req.file) {
-    res.status(400).json({ error: 'No file uploaded' });
-    return;
+    return next(Object.assign(new Error('No file uploaded'), { status: 400 }));
   }
 
   try {
-    // Parse PDF
-    const rawTransactions = await parsePDF(req.file.buffer);
+    const transactions = await parsePDF(req.file.buffer);
 
-    if (rawTransactions.length === 0) {
-      res.status(422).json({
-        error: 'No transactions found in PDF. Please ensure it is a valid bank statement.'
-      });
-      return;
+    if (transactions.length === 0) {
+      return next(Object.assign(
+        new Error('No transactions found in PDF. Please ensure it is a valid bank statement.'),
+        { status: 422 }
+      ));
     }
 
-    // AI categorization
-    let categorized: any[] = [];
-    try {
-      categorized = await categorizeTransactions(rawTransactions);
-    } catch (aiErr) {
-      console.error('AI categorization failed, using defaults:', aiErr);
-      // Fallback: basic categorization
-      categorized = rawTransactions.map(t => ({
-        id: t.id,
-        category: t.type === 'INCOME' ? 'INCOME' : 'VARIABLE_SPENDING',
-        confidence: 0.5,
-        isRecurring: false,
-        recurringFrequency: null
-      }));
-    }
+    (req as ParsedRequest).parsedTransactions = transactions;
+    console.log(`[parsePDFMiddleware] parsed ${transactions.length} transactions from ${req.file.originalname}`);
+    next();
+  } catch (err) {
+    next(err);
+  }
+}
 
-    // Merge raw transactions with AI categories
-    const categorizedMap = new Map(categorized.map((c: any) => [c.id, c]));
-    const result = rawTransactions.map(t => {
-      const aiData = categorizedMap.get(t.id) || {};
+// ─── Routes ───────────────────────────────────────────────────────────────────
+
+// POST /api/bank/upload
+// multer → parsePDFMiddleware → categorize → respond
+router.post('/upload', upload.single('file'), parsePDFMiddleware, async (req: Request, res: Response) => {
+  const rawTransactions = (req as ParsedRequest).parsedTransactions;
+
+  let categorized: any[] = [];
+  try {
+    categorized = await categorizeTransactions(rawTransactions);
+  } catch (aiErr) {
+    console.error('AI categorization failed, using keyword/default fallback:', aiErr);
+    categorized = rawTransactions.map(t => {
+      const rule = applyKeywordRules(t);
       return {
-        ...t,
-        autoCategory: aiData.category || (t.type === 'INCOME' ? 'INCOME' : 'VARIABLE_SPENDING'),
-        userCategory: aiData.category || (t.type === 'INCOME' ? 'INCOME' : 'VARIABLE_SPENDING'),
-        isRecurring: aiData.isRecurring || false,
-        recurringFrequency: aiData.recurringFrequency || null,
-        confidenceScore: aiData.confidence || 0.5
+        id: t.id,
+        category: rule?.category ?? (t.type === 'INCOME' ? 'INCOME' : 'VARIABLE_SPENDING'),
+        confidence: rule ? 0.9 : 0.4,
+        isRecurring: rule?.isRecurring ?? false,
+        recurringFrequency: rule?.recurringFrequency ?? null
       };
     });
-
-    res.json({ transactions: result, count: result.length });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Failed to process bank statement' });
   }
+
+  const result = mergeWithCategories(rawTransactions, categorized);
+  res.json({ transactions: result, count: result.length });
 });
 
-// POST /api/bank/import - save confirmed transactions
+// POST /api/bank/upload/stream  (Task 3 — SSE streaming endpoint placeholder)
+// Will be implemented in Task 3. Declared here so the middleware is wired in.
+router.post('/upload/stream', upload.single('file'), parsePDFMiddleware, async (req: Request, res: Response) => {
+  const rawTransactions = (req as ParsedRequest).parsedTransactions;
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no'
+  });
+
+  const send = (event: string, data: unknown) => {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+
+  // Phase 1: apply keyword rules instantly — send all transactions right away
+  const withKeywords = rawTransactions.map(t => {
+    const rule = applyKeywordRules(t);
+    return {
+      ...t,
+      autoCategory: rule?.category ?? (t.type === 'INCOME' ? 'INCOME' : 'VARIABLE_SPENDING'),
+      userCategory: rule?.category ?? (t.type === 'INCOME' ? 'INCOME' : 'VARIABLE_SPENDING'),
+      isRecurring: rule?.isRecurring ?? false,
+      recurringFrequency: rule?.recurringFrequency ?? null,
+      confidenceScore: rule ? 0.95 : null,
+      aiPending: !rule  // flag so frontend can show "classifying..." badge
+    };
+  });
+
+  send('transactions', { transactions: withKeywords, count: withKeywords.length });
+
+  // Phase 2: AI categorization for unmatched — stream updates as they arrive
+  // (Full streaming implementation added in Task 3)
+  const unmatched = rawTransactions.filter(t => !applyKeywordRules(t));
+
+  if (unmatched.length > 0) {
+    send('status', { message: `AI classifying ${unmatched.length} transactions...`, remaining: unmatched.length });
+
+    try {
+      const aiResults = await categorizeTransactions(unmatched);
+      send('categories', { updates: aiResults });
+    } catch (err) {
+      console.error('AI categorization failed during stream:', err);
+      send('categories', {
+        updates: unmatched.map(t => ({
+          id: t.id,
+          category: t.type === 'INCOME' ? 'INCOME' : 'VARIABLE_SPENDING',
+          confidence: 0.4,
+          isRecurring: false,
+          recurringFrequency: null
+        }))
+      });
+    }
+  }
+
+  send('done', { total: rawTransactions.length });
+  res.end();
+});
+
+// POST /api/bank/import
 router.post('/import', async (req: Request, res: Response) => {
   const { transactions } = req.body;
 
@@ -114,7 +198,6 @@ router.post('/import', async (req: Request, res: Response) => {
         );
         imported.push(mapRow(rows[0]));
 
-        // Update merchant_categories for future reference
         await client.query(
           `INSERT INTO merchant_categories (merchant_pattern, category)
            VALUES ($1, $2)
@@ -135,6 +218,17 @@ router.post('/import', async (req: Request, res: Response) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Failed to import transactions' });
+  }
+});
+
+// DELETE /api/bank/transactions
+router.delete('/transactions', async (_req: Request, res: Response) => {
+  try {
+    await pool.query('TRUNCATE bank_transactions, merchant_categories RESTART IDENTITY');
+    res.json({ message: 'All transactions cleared' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to clear transactions' });
   }
 });
 
@@ -173,7 +267,7 @@ router.get('/transactions', async (req: Request, res: Response) => {
   }
 });
 
-// PUT /api/bank/transactions/:id - update user category
+// PUT /api/bank/transactions/:id
 router.put('/transactions/:id', async (req: Request, res: Response) => {
   const { id } = req.params;
   const { userCategory, isRecurring, recurringFrequency } = req.body;

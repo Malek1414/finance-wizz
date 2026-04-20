@@ -1,12 +1,12 @@
 import { useQuery } from '@tanstack/react-query';
 import { financeApi } from '../../api/client';
-import { TrendingUp } from 'lucide-react';
+import { B } from '../../design';
 
 function formatEuro(value: number): string {
   return new Intl.NumberFormat('de-DE', {
     style: 'currency',
     currency: 'EUR',
-    minimumFractionDigits: 2
+    minimumFractionDigits: 2,
   }).format(value);
 }
 
@@ -14,60 +14,118 @@ export default function Header() {
   const { data: tree } = useQuery({
     queryKey: ['finance-tree'],
     queryFn: financeApi.getTree,
-    refetchInterval: 30_000
+    refetchInterval: 30_000,
   });
 
   const totalBalance = tree?.value ?? 0;
-  const incomeNode = tree?.children?.find(c => c.type === 'INCOME');
+  const incomeNode = tree?.children?.find((c: { type: string }) => c.type === 'INCOME');
   const totalIncome = incomeNode?.value ?? 0;
-
   const isPositive = totalBalance >= 0;
 
+  const balanceColor = isPositive ? B.mint : B.rose;
+
   return (
-    <header className="h-16 bg-black/95 border-b border-zinc-800/60 backdrop-blur-md flex items-center px-6 justify-between z-40 sticky top-0">
-      <div className="flex items-center gap-3">
-        {/* Logo */}
-        <div className="h-10 w-10 rounded-lg overflow-hidden flex-shrink-0 ring-1 ring-white/10 shadow-xl shadow-black/60">
+    <header
+      style={{
+        height: 56,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingLeft: 100,
+        paddingRight: 24,
+        borderBottom: `1px solid ${B.hair}`,
+        background: 'rgba(255,255,255,0.02)',
+        backdropFilter: 'blur(40px)',
+        WebkitBackdropFilter: 'blur(40px)',
+        flexShrink: 0,
+        zIndex: 50,
+      }}
+    >
+      {/* Brand */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div
+          style={{
+            width: 32,
+            height: 32,
+            borderRadius: 10,
+            overflow: 'hidden',
+            border: '1px solid rgba(255,255,255,0.12)',
+            flexShrink: 0,
+          }}
+        >
           <img
             src="/logo.png"
-            alt="Finance Wizz logo"
-            className="w-full h-full object-cover object-[center_15%]"
+            alt="Finance Wizz"
+            style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'center 15%' }}
           />
         </div>
-        <div>
-          <h1 className="text-lg font-bold text-white leading-none tracking-tight">Finance Wizz</h1>
-          <div className="flex items-center gap-1.5 mt-0.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-            <p className="text-xs text-zinc-600">Live dashboard</p>
-          </div>
+        <span
+          style={{
+            fontSize: 15,
+            fontWeight: 700,
+            letterSpacing: '-0.02em',
+            color: B.text,
+          }}
+        >
+          Finance Wizz
+        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <div
+            style={{
+              width: 6,
+              height: 6,
+              borderRadius: '50%',
+              background: B.mint,
+              boxShadow: `0 0 8px ${B.mint}`,
+              animation: 'pulse 2s ease-in-out infinite',
+            }}
+          />
+          <span style={{ fontSize: 11, color: B.textMute, letterSpacing: '0.04em' }}>Live</span>
         </div>
       </div>
 
-      <div className="flex items-center gap-4">
+      {/* Balance display */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
         {totalIncome > 0 && (
-          <div className="hidden md:flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-1.5">
-            <TrendingUp className="w-3.5 h-3.5 text-emerald-400" />
-            <span className="text-xs text-slate-400">Income</span>
-            <span className="text-sm font-semibold text-emerald-400">{formatEuro(totalIncome)}</span>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '5px 14px',
+              borderRadius: 999,
+              background: `oklch(80% 0.14 155 / 0.08)`,
+              border: `1px solid oklch(80% 0.14 155 / 0.2)`,
+            }}
+          >
+            <span style={{ fontSize: 11, color: B.textMute }}>Income</span>
+            <span style={{ fontSize: 13, fontWeight: 700, color: B.mint }}>{formatEuro(totalIncome)}</span>
           </div>
         )}
 
-        <div className={`flex items-center gap-3 rounded-xl px-4 py-2 border ${
-          isPositive
-            ? 'bg-emerald-500/10 border-emerald-500/25'
-            : 'bg-rose-500/10 border-rose-500/25'
-        }`}>
-          <div className="text-right hidden sm:block">
-            <p className="text-xs text-slate-500 leading-none mb-0.5">Total Balance</p>
-            <span className={`text-xl font-bold leading-none ${
-              isPositive
-                ? 'text-emerald-400 balance-glow'
-                : 'text-rose-400 balance-glow-negative'
-            }`}>
-              {formatEuro(totalBalance)}
-            </span>
-          </div>
-          <span className={`text-xl font-bold sm:hidden ${isPositive ? 'text-emerald-400' : 'text-rose-400'}`}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '5px 18px',
+            borderRadius: 999,
+            background: isPositive
+              ? 'oklch(80% 0.14 155 / 0.07)'
+              : 'oklch(72% 0.16 22 / 0.07)',
+            border: `1px solid ${isPositive ? 'oklch(80% 0.14 155 / 0.2)' : 'oklch(72% 0.16 22 / 0.2)'}`,
+          }}
+        >
+          <span style={{ fontSize: 11, color: B.textMute }}>Balance</span>
+          <span
+            style={{
+              fontSize: 16,
+              fontWeight: 800,
+              color: balanceColor,
+              letterSpacing: '-0.02em',
+              textShadow: `0 0 20px ${balanceColor}50`,
+            }}
+          >
             {formatEuro(totalBalance)}
           </span>
         </div>

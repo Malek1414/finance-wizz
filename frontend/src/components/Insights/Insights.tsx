@@ -1,4 +1,6 @@
+import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { motion } from 'framer-motion';
 import { insightsApi } from '../../api/client';
 import { SpendingPieChart, MonthlyAreaChart, HealthGauge } from './Charts';
 import {
@@ -6,6 +8,9 @@ import {
   RefreshCw, ShoppingCart, AlertTriangle, CheckCircle,
   BarChart3, RepeatIcon
 } from 'lucide-react';
+import { B, grad } from '../../design';
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function formatEuro(value: number): string {
   return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(value);
@@ -15,84 +20,195 @@ function formatPct(value: number): string {
   return `${value.toFixed(1)}%`;
 }
 
-interface StatCardProps {
-  title: string;
-  value: string;
-  subtitle?: string;
-  icon: React.ElementType;
-  color: string;
-  trend?: 'up' | 'down' | 'neutral';
+function useCountUp(target: number, duration = 900) {
+  const [display, setDisplay] = useState(0);
+  const raf = useRef<number>(0);
+
+  useEffect(() => {
+    const start = performance.now();
+    const tick = (now: number) => {
+      const progress = Math.min((now - start) / duration, 1);
+      const eased = 1 - Math.pow(1 - progress, 4);
+      setDisplay(target * eased);
+      if (progress < 1) raf.current = requestAnimationFrame(tick);
+    };
+    raf.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf.current);
+  }, [target, duration]);
+
+  return display;
 }
 
-function StatCard({ title, value, subtitle, icon: Icon, color, trend }: StatCardProps) {
+// ─── Stat Card (Aurora edition) ───────────────────────────────────────────────
+
+interface StatCardProps {
+  title: string;
+  value: number;
+  isPercent?: boolean;
+  subtitle?: string;
+  icon: React.ElementType;
+  gradient: string;
+  glowColor: string;
+  trend?: 'up' | 'down' | 'neutral';
+  delay?: number;
+}
+
+function StatCard({ title, value, isPercent, subtitle, icon: Icon, gradient, glowColor, trend, delay = 0 }: StatCardProps) {
+  const animated = useCountUp(value);
+  const displayValue = isPercent ? formatPct(animated) : formatEuro(animated);
+
   return (
-    <div className="glass-card-hover p-4">
-      <div className="flex items-start justify-between mb-3">
-        <div className="w-10 h-10 rounded-xl flex items-center justify-center"
-          style={{ backgroundColor: `${color}18` }}>
-          <Icon className="w-5 h-5" style={{ color }} />
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4, delay, ease: [0.25, 0.1, 0.25, 1] as const }}
+      style={{
+        padding: '20px',
+        borderRadius: 20,
+        background: 'rgba(255,255,255,0.04)',
+        backdropFilter: 'blur(40px)',
+        WebkitBackdropFilter: 'blur(40px)',
+        border: '1px solid rgba(255,255,255,0.08)',
+        boxShadow: '0 4px 32px rgba(0,0,0,0.3)',
+        transition: 'all 0.2s ease',
+        cursor: 'default',
+      }}
+      whileHover={{
+        y: -2,
+        boxShadow: `0 8px 40px rgba(0,0,0,0.4), 0 0 30px ${glowColor}20`,
+        borderColor: 'rgba(255,255,255,0.13)',
+      } as never}
+    >
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 16 }}>
+        <div
+          style={{
+            width: 40,
+            height: 40,
+            borderRadius: 14,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: gradient,
+            flexShrink: 0,
+          }}
+        >
+          <Icon style={{ width: 18, height: 18, color: 'oklch(11% 0.012 265)' }} />
         </div>
         {trend && (
-          <div className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded-full ${
-            trend === 'up'
-              ? 'text-emerald-400 bg-emerald-500/10'
-              : trend === 'down'
-              ? 'text-rose-400 bg-rose-500/10'
-              : 'text-slate-400'
-          }`}>
-            {trend === 'up' ? <TrendingUp className="w-3 h-3" /> :
-             trend === 'down' ? <TrendingDown className="w-3 h-3" /> : null}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
+              fontSize: 11,
+              padding: '3px 10px',
+              borderRadius: 999,
+              background: trend === 'up'
+                ? 'oklch(80% 0.14 155 / 0.12)'
+                : trend === 'down'
+                ? 'oklch(72% 0.16 22 / 0.12)'
+                : 'transparent',
+              color: trend === 'up' ? B.mint : trend === 'down' ? B.rose : B.textMute,
+            }}
+          >
+            {trend === 'up' ? <TrendingUp style={{ width: 12, height: 12 }} /> :
+             trend === 'down' ? <TrendingDown style={{ width: 12, height: 12 }} /> : null}
           </div>
         )}
       </div>
-      <div>
-        <p className="text-2xl font-bold text-slate-100 tabular-nums">{value}</p>
-        <p className="text-xs text-slate-500 uppercase tracking-wide mt-1">{title}</p>
-        {subtitle && (
-          <p className="text-xs mt-1.5 font-medium" style={{ color }}>{subtitle}</p>
-        )}
-      </div>
+      <p
+        style={{
+          fontSize: 26,
+          fontWeight: 800,
+          color: B.text,
+          letterSpacing: '-0.03em',
+          lineHeight: 1,
+          marginBottom: 6,
+          fontVariantNumeric: 'tabular-nums',
+        }}
+      >
+        {displayValue}
+      </p>
+      <p style={{ fontSize: 11, color: B.textMute, textTransform: 'uppercase', letterSpacing: '0.08em' }}>{title}</p>
+      {subtitle && (
+        <p style={{ fontSize: 12, fontWeight: 600, marginTop: 6, color: glowColor }}>{subtitle}</p>
+      )}
+    </motion.div>
+  );
+}
+
+const containerVariants = {
+  hidden: {},
+  show: { transition: { staggerChildren: 0.07 } },
+};
+
+const itemVariants = {
+  hidden: { opacity: 0, y: 18 },
+  show: { opacity: 1, y: 0, transition: { duration: 0.35, ease: [0.25, 0.1, 0.25, 1] as const } },
+};
+
+// ─── Chapter label ────────────────────────────────────────────────────────────
+function Chapter({ num, title }: { num: string; title: string }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+      <span
+        style={{
+          fontSize: 10,
+          fontWeight: 700,
+          textTransform: 'uppercase',
+          letterSpacing: '0.14em',
+          color: B.aurora,
+        }}
+      >
+        {num}
+      </span>
+      <div style={{ flex: 1, height: 1, background: 'rgba(255,255,255,0.06)' }} />
+      <span style={{ fontSize: 18, fontWeight: 700, color: B.text, letterSpacing: '-0.02em' }}>{title}</span>
+      <div style={{ flex: 1, height: 1, background: 'rgba(255,255,255,0.06)' }} />
     </div>
   );
 }
+
+// ─── Glass panel wrapper ───────────────────────────────────────────────────────
+function Panel({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
+  return (
+    <div
+      style={{
+        padding: 24,
+        borderRadius: 20,
+        background: 'rgba(255,255,255,0.04)',
+        backdropFilter: 'blur(40px)',
+        WebkitBackdropFilter: 'blur(40px)',
+        border: '1px solid rgba(255,255,255,0.08)',
+        boxShadow: '0 4px 32px rgba(0,0,0,0.3)',
+        ...style,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+// ─── Main component ───────────────────────────────────────────────────────────
 
 export default function Insights() {
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['insights'],
     queryFn: insightsApi.getSummary,
-    staleTime: 60_000
+    staleTime: 60_000,
   });
 
   if (isLoading) {
     return (
-      <div className="h-full overflow-auto">
-        <div className="p-6 space-y-6">
-          <div className="flex items-center justify-between">
-            <div className="space-y-2">
-              <div className="skeleton h-5 w-40" />
-              <div className="skeleton h-3 w-56" />
-            </div>
-            <div className="skeleton h-8 w-24 rounded-lg" />
-          </div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            {Array.from({ length: 4 }).map((_, i) => (
-              <div key={i} className="glass-card p-4 space-y-3">
-                <div className="skeleton h-10 w-10 rounded-xl" />
-                <div className="skeleton h-7 w-3/4" />
-                <div className="skeleton h-3 w-1/2" />
-              </div>
-            ))}
-          </div>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div className="glass-card p-5 space-y-4">
-              <div className="skeleton h-4 w-40" />
-              <div className="skeleton h-48 w-full rounded-xl" />
-            </div>
-            <div className="glass-card p-5 space-y-4">
-              <div className="skeleton h-4 w-52" />
-              <div className="skeleton h-48 w-full rounded-xl" />
-            </div>
-          </div>
+      <div style={{ padding: 32 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 32 }}>
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="skeleton" style={{ height: 120, borderRadius: 20 }} />
+          ))}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+          <div className="skeleton" style={{ height: 280, borderRadius: 20 }} />
+          <div className="skeleton" style={{ height: 280, borderRadius: 20 }} />
         </div>
       </div>
     );
@@ -100,18 +216,31 @@ export default function Insights() {
 
   if (error || !data) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <div className="glass-card p-8 text-center max-w-md">
-          <BarChart3 className="w-12 h-12 text-slate-600 mx-auto mb-4" />
-          <p className="text-slate-300 font-medium mb-2">No insights yet</p>
-          <p className="text-slate-400 text-sm">
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', padding: 32 }}>
+        <motion.div
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ duration: 0.3 }}
+          style={{
+            padding: 40,
+            textAlign: 'center',
+            maxWidth: 420,
+            borderRadius: 24,
+            background: 'rgba(255,255,255,0.04)',
+            backdropFilter: 'blur(40px)',
+            border: '1px solid rgba(255,255,255,0.08)',
+          }}
+        >
+          <BarChart3 style={{ width: 48, height: 48, color: B.textMute, margin: '0 auto 16px' }} />
+          <p style={{ color: B.text, fontWeight: 600, fontSize: 16, marginBottom: 8 }}>No insights yet</p>
+          <p style={{ color: B.textMute, fontSize: 14, lineHeight: 1.6 }}>
             Import bank transactions to see your spending analytics and financial health score.
           </p>
-          <button onClick={() => refetch()} className="btn-secondary mt-4 flex items-center gap-2 mx-auto">
-            <RefreshCw className="w-4 h-4" />
+          <button onClick={() => refetch()} className="btn-secondary" style={{ marginTop: 20, display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <RefreshCw style={{ width: 14, height: 14 }} />
             Retry
           </button>
-        </div>
+        </motion.div>
       </div>
     );
   }
@@ -120,128 +249,161 @@ export default function Insights() {
     spendingByCategory, monthlyHistory, healthScore,
     topMerchants, recurringExpenses, wishlistAffordability } = data;
 
-  const monthlyRecurring = recurringExpenses.reduce((sum, t) => sum + t.amount, 0);
+  const monthlyRecurring = recurringExpenses.reduce((sum: number, t: { amount: number }) => sum + t.amount, 0);
 
   return (
-    <div className="h-full overflow-auto">
-      <div className="p-6 space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-lg font-semibold text-slate-100">Financial Insights</h2>
-            <p className="text-xs text-slate-500">Based on all imported transactions</p>
-          </div>
-          <button onClick={() => refetch()} className="btn-secondary flex items-center gap-2 text-sm py-1.5">
-            <RefreshCw className="w-3.5 h-3.5" />
-            Refresh
-          </button>
-        </div>
+    <div style={{ padding: '32px 32px 64px', maxWidth: 1200, margin: '0 auto' }}>
 
-        {/* Summary Stats */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <StatCard
-            title="Total Income"
-            value={formatEuro(totalIncome)}
-            icon={TrendingUp}
-            color="#10b981"
-            trend="up"
-          />
-          <StatCard
-            title="Total Expenses"
-            value={formatEuro(totalExpenses)}
-            icon={TrendingDown}
-            color="#f43f5e"
-            trend="down"
-          />
-          <StatCard
-            title="Net Remaining"
-            value={formatEuro(remaining)}
-            subtitle={remaining >= 0 ? 'Positive balance' : 'Over budget'}
-            icon={DollarSign}
-            color={remaining >= 0 ? '#10b981' : '#f43f5e'}
-            trend={remaining >= 0 ? 'up' : 'down'}
-          />
-          <StatCard
-            title="Savings Rate"
-            value={formatPct(savingsRate)}
-            subtitle={savingsRate >= 20 ? 'Great!' : savingsRate >= 10 ? 'Good' : 'Improve this'}
-            icon={PiggyBank}
-            color={savingsRate >= 20 ? '#10b981' : savingsRate >= 10 ? '#f59e0b' : '#f43f5e'}
-          />
+      {/* Header */}
+      <motion.div
+        initial={{ opacity: 0, y: -10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.35 }}
+        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 32 }}
+      >
+        <div>
+          <h2 className="iridescent-text" style={{ fontSize: 28, fontWeight: 800, letterSpacing: '-0.03em', margin: 0, lineHeight: 1 }}>
+            Financial Insights
+          </h2>
+          <p style={{ fontSize: 13, color: B.textMute, marginTop: 6, margin: '6px 0 0' }}>
+            Based on all imported transactions
+          </p>
         </div>
+        <button
+          onClick={() => refetch()}
+          className="btn-secondary"
+          style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}
+        >
+          <RefreshCw style={{ width: 14, height: 14 }} />
+          Refresh
+        </button>
+      </motion.div>
 
-        {/* Charts Row */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Spending Breakdown */}
-          <div className="glass-card p-5">
-            <h3 className="font-semibold text-slate-200 mb-4 flex items-center gap-2">
-              <div className="w-1.5 h-4 rounded-full bg-amber-400" />
-              Spending Breakdown
-            </h3>
+      {/* ── Chapter 01 — Cash Flow ──────────────────────────────────────────── */}
+      <Chapter num="01" title="Cash Flow" />
+
+      {/* Summary stat cards */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 32 }}>
+        <StatCard
+          title="Total Income" value={totalIncome}
+          icon={TrendingUp} gradient={grad.income} glowColor={B.mint}
+          trend="up" delay={0}
+        />
+        <StatCard
+          title="Total Expenses" value={totalExpenses}
+          icon={TrendingDown} gradient={grad.expense} glowColor={B.rose}
+          trend="down" delay={0.07}
+        />
+        <StatCard
+          title="Net Remaining" value={remaining}
+          icon={DollarSign}
+          gradient={remaining >= 0 ? grad.income : grad.expense}
+          glowColor={remaining >= 0 ? B.mint : B.rose}
+          subtitle={remaining >= 0 ? 'Positive balance' : 'Over budget'}
+          trend={remaining >= 0 ? 'up' : 'down'} delay={0.14}
+        />
+        <StatCard
+          title="Savings Rate" value={savingsRate} isPercent
+          icon={PiggyBank}
+          gradient={savingsRate >= 20 ? grad.income : savingsRate >= 10 ? grad.gold : grad.expense}
+          glowColor={savingsRate >= 20 ? B.mint : savingsRate >= 10 ? B.gold : B.rose}
+          subtitle={savingsRate >= 20 ? 'Excellent!' : savingsRate >= 10 ? 'Good — aim for 20%' : 'Needs improvement'}
+          delay={0.21}
+        />
+      </div>
+
+      {/* ── Chapter 02 — Breakdown ─────────────────────────────────────────── */}
+      <Chapter num="02" title="Breakdown" />
+
+      <motion.div
+        style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 32 }}
+        variants={containerVariants}
+        initial="hidden"
+        animate="show"
+      >
+        <motion.div variants={itemVariants}>
+          <Panel>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
+              <div style={{ width: 4, height: 18, borderRadius: 2, background: grad.gold }} />
+              <h3 style={{ fontSize: 14, fontWeight: 700, color: B.text, margin: 0 }}>Spending Breakdown</h3>
+            </div>
             <SpendingPieChart data={spendingByCategory} />
-          </div>
+          </Panel>
+        </motion.div>
 
-          {/* Monthly History */}
-          <div className="glass-card p-5">
-            <h3 className="font-semibold text-slate-200 mb-4 flex items-center gap-2">
-              <div className="w-1.5 h-4 rounded-full bg-sky-400" />
-              Income vs Expenses (6 months)
-            </h3>
+        <motion.div variants={itemVariants}>
+          <Panel>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
+              <div style={{ width: 4, height: 18, borderRadius: 2, background: grad.aurora }} />
+              <h3 style={{ fontSize: 14, fontWeight: 700, color: B.text, margin: 0 }}>Income vs Expenses (6 months)</h3>
+            </div>
             <MonthlyAreaChart data={monthlyHistory} />
-          </div>
-        </div>
+          </Panel>
+        </motion.div>
+      </motion.div>
 
-        {/* Health Score + Wishlist */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* Health Score */}
-          <div className="glass-card p-5">
-            <h3 className="font-semibold text-slate-200 mb-4 flex items-center gap-2">
-              <div className="w-1.5 h-4 rounded-full bg-violet-400" />
-              Financial Health Score
-            </h3>
+      {/* ── Chapter 03 — Health & Goals ────────────────────────────────────── */}
+      <Chapter num="03" title="Health & Goals" />
+
+      <motion.div
+        style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 32 }}
+        variants={containerVariants}
+        initial="hidden"
+        animate="show"
+      >
+        <motion.div variants={itemVariants}>
+          <Panel>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
+              <div style={{ width: 4, height: 18, borderRadius: 2, background: grad.mint }} />
+              <h3 style={{ fontSize: 14, fontWeight: 700, color: B.text, margin: 0 }}>Financial Health Score</h3>
+            </div>
             <HealthGauge score={healthScore} />
-            <div className="mt-4 space-y-2">
-              <div className="flex items-start gap-2 text-sm">
+            <div style={{ marginTop: 20, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, fontSize: 13 }}>
                 {savingsRate >= 20
-                  ? <CheckCircle className="w-4 h-4 text-emerald-400 mt-0.5 flex-shrink-0" />
-                  : <AlertTriangle className="w-4 h-4 text-amber-400 mt-0.5 flex-shrink-0" />
+                  ? <CheckCircle style={{ width: 16, height: 16, color: B.mint, marginTop: 1, flexShrink: 0 }} />
+                  : <AlertTriangle style={{ width: 16, height: 16, color: B.gold, marginTop: 1, flexShrink: 0 }} />
                 }
-                <span className="text-slate-300">
-                  Savings rate: <strong className={savingsRate >= 20 ? 'text-emerald-400' : 'text-amber-400'}>
+                <span style={{ color: B.textDim }}>
+                  Savings rate:{' '}
+                  <strong style={{ color: savingsRate >= 20 ? B.mint : B.gold }}>
                     {formatPct(savingsRate)}
-                  </strong> {savingsRate >= 20 ? '(excellent)' : '(aim for 20%+)'}
+                  </strong>{' '}
+                  {savingsRate >= 20 ? '(excellent)' : '(aim for 20%+)'}
                 </span>
               </div>
-              <div className="flex items-start gap-2 text-sm">
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, fontSize: 13 }}>
                 {recurringExpenses.length > 0
-                  ? <AlertTriangle className="w-4 h-4 text-amber-400 mt-0.5 flex-shrink-0" />
-                  : <CheckCircle className="w-4 h-4 text-emerald-400 mt-0.5 flex-shrink-0" />
+                  ? <AlertTriangle style={{ width: 16, height: 16, color: B.gold, marginTop: 1, flexShrink: 0 }} />
+                  : <CheckCircle style={{ width: 16, height: 16, color: B.mint, marginTop: 1, flexShrink: 0 }} />
                 }
-                <span className="text-slate-300">
-                  Recurring costs: <strong className="text-amber-400">{formatEuro(monthlyRecurring)}/month</strong>
+                <span style={{ color: B.textDim }}>
+                  Recurring costs:{' '}
+                  <strong style={{ color: B.rose }}>{formatEuro(monthlyRecurring)}/month</strong>
                 </span>
               </div>
             </div>
-          </div>
+          </Panel>
+        </motion.div>
 
-          {/* Wishlist Affordability */}
-          <div className="glass-card p-5">
-            <h3 className="font-semibold text-slate-200 mb-4 flex items-center gap-2">
-              <div className="w-1.5 h-4 rounded-full bg-sky-400" />
-              Wishlist Affordability
-            </h3>
+        <motion.div variants={itemVariants}>
+          <Panel>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
+              <div style={{ width: 4, height: 18, borderRadius: 2, background: grad.aurora }} />
+              <h3 style={{ fontSize: 14, fontWeight: 700, color: B.text, margin: 0 }}>Wishlist Affordability</h3>
+            </div>
             {wishlistAffordability.totalWishlistCost > 0 ? (
-              <div className="space-y-4">
-                <div className="flex items-center gap-3">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                   {wishlistAffordability.canAfford
-                    ? <CheckCircle className="w-10 h-10 text-emerald-400 flex-shrink-0" />
-                    : <AlertTriangle className="w-10 h-10 text-amber-400 flex-shrink-0" />
+                    ? <CheckCircle style={{ width: 36, height: 36, color: B.mint, flexShrink: 0 }} />
+                    : <AlertTriangle style={{ width: 36, height: 36, color: B.gold, flexShrink: 0 }} />
                   }
                   <div>
-                    <p className={`font-semibold ${wishlistAffordability.canAfford ? 'text-emerald-400' : 'text-amber-400'}`}>
+                    <p style={{ fontSize: 15, fontWeight: 700, color: wishlistAffordability.canAfford ? B.mint : B.gold, margin: 0 }}>
                       {wishlistAffordability.canAfford ? 'You can afford your wishlist!' : 'Wishlist exceeds budget'}
                     </p>
-                    <p className="text-xs text-slate-400 mt-0.5">
+                    <p style={{ fontSize: 12, color: B.textMute, marginTop: 4 }}>
                       {wishlistAffordability.canAfford
                         ? `${formatEuro(remaining - wishlistAffordability.totalWishlistCost)} left after purchases`
                         : `${formatEuro(wishlistAffordability.shortfall)} short of your goal`
@@ -249,107 +411,149 @@ export default function Insights() {
                     </p>
                   </div>
                 </div>
-                <div className="space-y-2">
-                  <div className="flex justify-between text-sm">
-                    <span className="text-slate-400">Total wishlist cost</span>
-                    <span className="text-slate-200 font-medium">{formatEuro(wishlistAffordability.totalWishlistCost)}</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-slate-400">Available budget</span>
-                    <span className={`font-medium ${remaining >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                      {formatEuro(remaining)}
-                    </span>
-                  </div>
-                  {/* Progress bar */}
-                  <div className="mt-2">
-                    <div className="h-2 bg-zinc-800 rounded-full overflow-hidden">
-                      <div
-                        className={`h-full rounded-full transition-all duration-1000 ${
-                          wishlistAffordability.canAfford ? 'bg-emerald-500' : 'bg-amber-500'
-                        }`}
-                        style={{
-                          width: `${Math.min(100, (remaining / wishlistAffordability.totalWishlistCost) * 100)}%`
-                        }}
-                      />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {[
+                    { label: 'Total wishlist cost', value: formatEuro(wishlistAffordability.totalWishlistCost), color: B.textDim },
+                    { label: 'Available budget', value: formatEuro(remaining), color: remaining >= 0 ? B.mint : B.rose },
+                  ].map(row => (
+                    <div key={row.label} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+                      <span style={{ color: B.textMute }}>{row.label}</span>
+                      <span style={{ fontWeight: 700, color: row.color }}>{row.value}</span>
                     </div>
-                    <p className="text-xs text-slate-500 mt-1">
-                      {Math.min(100, Math.round((remaining / wishlistAffordability.totalWishlistCost) * 100))}% funded
-                    </p>
+                  ))}
+                  <div style={{ height: 6, borderRadius: 999, background: 'rgba(255,255,255,0.06)', overflow: 'hidden', marginTop: 4 }}>
+                    <motion.div
+                      style={{ height: '100%', borderRadius: 999, background: wishlistAffordability.canAfford ? grad.income : grad.gold }}
+                      initial={{ width: 0 }}
+                      animate={{ width: `${Math.min(100, (remaining / wishlistAffordability.totalWishlistCost) * 100)}%` }}
+                      transition={{ duration: 1, delay: 0.4, ease: [0.25, 0.1, 0.25, 1] as const }}
+                    />
                   </div>
+                  <p style={{ fontSize: 11, color: B.textMute }}>
+                    {Math.min(100, Math.round((remaining / wishlistAffordability.totalWishlistCost) * 100))}% funded
+                  </p>
                 </div>
               </div>
             ) : (
-              <div className="flex flex-col items-center justify-center h-32 gap-2 text-center">
-                <ShoppingCart className="w-8 h-8 text-slate-600" />
-                <p className="text-slate-400 text-sm">No items in your wishlist</p>
-                <p className="text-slate-500 text-xs">Add purchase items to see affordability analysis</p>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: 160, gap: 10, textAlign: 'center' }}>
+                <ShoppingCart style={{ width: 32, height: 32, color: B.textMute }} />
+                <p style={{ color: B.textDim, fontSize: 14, margin: 0 }}>No items in your wishlist</p>
+                <p style={{ color: B.textMute, fontSize: 12, margin: 0 }}>Add purchase items to see affordability analysis</p>
               </div>
             )}
-          </div>
-        </div>
+          </Panel>
+        </motion.div>
+      </motion.div>
 
-        {/* Recurring Expenses */}
-        {recurringExpenses.length > 0 && (
-          <div className="glass-card p-5">
-            <h3 className="font-semibold text-slate-200 mb-4 flex items-center gap-2">
-              <div className="w-1.5 h-4 rounded-full bg-violet-400" />
-              <RepeatIcon className="w-4 h-4 text-violet-400" />
-              Recurring Expenses ({recurringExpenses.length})
-            </h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-              {recurringExpenses.map(t => (
-                <div key={t.id} className="bg-black/40 border border-zinc-800/40 rounded-lg p-3 flex items-center justify-between">
+      {/* Recurring Expenses */}
+      {recurringExpenses.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.35, delay: 0.3 }}
+          style={{ marginBottom: 32 }}
+        >
+          <Panel>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
+              <div style={{ width: 4, height: 18, borderRadius: 2, background: grad.mint }} />
+              <RepeatIcon style={{ width: 16, height: 16, color: B.violet }} />
+              <h3 style={{ fontSize: 14, fontWeight: 700, color: B.text, margin: 0 }}>
+                Recurring Expenses ({recurringExpenses.length})
+              </h3>
+            </div>
+            <motion.div
+              style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}
+              variants={containerVariants}
+              initial="hidden"
+              animate="show"
+            >
+              {recurringExpenses.map((t: { id: string; merchant: string; recurringFrequency?: string | null; amount: number }) => (
+                <motion.div
+                  key={t.id}
+                  variants={itemVariants}
+                  style={{
+                    background: 'rgba(255,255,255,0.03)',
+                    border: '1px solid rgba(255,255,255,0.06)',
+                    borderRadius: 14,
+                    padding: '12px 14px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                  }}
+                >
                   <div>
-                    <p className="text-sm font-medium text-slate-200 truncate">{t.merchant}</p>
-                    <p className="text-xs text-violet-400 mt-0.5 capitalize">{t.recurringFrequency?.toLowerCase()}</p>
+                    <p style={{ fontSize: 13, fontWeight: 600, color: B.text, margin: 0, maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {t.merchant}
+                    </p>
+                    <p style={{ fontSize: 11, color: B.violet, marginTop: 4, margin: '4px 0 0', textTransform: 'capitalize' }}>
+                      {t.recurringFrequency?.toLowerCase()}
+                    </p>
                   </div>
-                  <span className="text-sm font-bold text-rose-400 flex-shrink-0">{formatEuro(t.amount)}</span>
-                </div>
+                  <span style={{ fontSize: 13, fontWeight: 800, color: B.rose, flexShrink: 0, marginLeft: 8 }}>
+                    {formatEuro(t.amount)}
+                  </span>
+                </motion.div>
               ))}
+            </motion.div>
+            <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid rgba(255,255,255,0.06)', display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+              <span style={{ color: B.textMute }}>Total recurring per month</span>
+              <span style={{ fontWeight: 800, color: B.rose }}>{formatEuro(monthlyRecurring)}</span>
             </div>
-            <div className="mt-3 pt-3 border-t border-slate-700/30 flex justify-between text-sm">
-              <span className="text-slate-400">Total recurring per month</span>
-              <span className="text-rose-400 font-bold">{formatEuro(monthlyRecurring)}</span>
-            </div>
-          </div>
-        )}
+          </Panel>
+        </motion.div>
+      )}
 
-        {/* Top Merchants */}
-        {topMerchants.length > 0 && (
-          <div className="glass-card p-5">
-            <h3 className="font-semibold text-slate-200 mb-4 flex items-center gap-2">
-              <div className="w-1.5 h-4 rounded-full bg-rose-400" />
-              Top Spending Merchants
-            </h3>
-            <div className="space-y-3">
-              {topMerchants.slice(0, 8).map((m, i) => {
+      {/* Top Merchants */}
+      {topMerchants.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.35, delay: 0.35 }}
+        >
+          <Panel>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
+              <div style={{ width: 4, height: 18, borderRadius: 2, background: grad.rose }} />
+              <h3 style={{ fontSize: 14, fontWeight: 700, color: B.text, margin: 0 }}>Top Spending Merchants</h3>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              {topMerchants.slice(0, 8).map((m: { merchant: string; total: number; count: number }, i: number) => {
                 const maxTotal = topMerchants[0].total;
                 const pct = (m.total / maxTotal) * 100;
                 return (
-                  <div key={m.merchant} className="flex items-center gap-3">
-                    <span className="text-xs text-slate-500 w-4 text-right flex-shrink-0">{i + 1}</span>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-sm text-slate-300 truncate">{m.merchant}</span>
-                        <div className="flex items-center gap-3 flex-shrink-0 ml-2">
-                          <span className="text-xs text-slate-500">{m.count}x</span>
-                          <span className="text-sm font-semibold text-slate-200">{formatEuro(m.total)}</span>
+                  <motion.div
+                    key={m.merchant}
+                    style={{ display: 'flex', alignItems: 'center', gap: 12 }}
+                    initial={{ opacity: 0, x: -12 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ duration: 0.3, delay: 0.35 + i * 0.05 }}
+                  >
+                    <span style={{ fontSize: 11, color: B.textMute, width: 16, textAlign: 'right', flexShrink: 0 }}>{i + 1}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                        <span style={{ fontSize: 13, color: B.textDim, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '60%' }}>
+                          {m.merchant}
+                        </span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0, marginLeft: 8 }}>
+                          <span style={{ fontSize: 11, color: B.textMute }}>{m.count}x</span>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: B.text }}>{formatEuro(m.total)}</span>
                         </div>
                       </div>
-                      <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-rose-500/60 rounded-full transition-all duration-1000"
-                          style={{ width: `${pct}%` }}
+                      <div style={{ height: 4, borderRadius: 999, background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
+                        <motion.div
+                          style={{ height: '100%', borderRadius: 999, background: grad.rose }}
+                          initial={{ width: 0 }}
+                          animate={{ width: `${pct}%` }}
+                          transition={{ duration: 0.8, delay: 0.4 + i * 0.05, ease: [0.25, 0.1, 0.25, 1] as const }}
                         />
                       </div>
                     </div>
-                  </div>
+                  </motion.div>
                 );
               })}
             </div>
-          </div>
-        )}
-      </div>
+          </Panel>
+        </motion.div>
+      )}
     </div>
   );
 }

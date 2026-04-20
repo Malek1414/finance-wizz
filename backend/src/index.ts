@@ -1,6 +1,8 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import path from 'path';
+import fs from 'fs';
 import { initDB } from './db/client';
 import financeRoutes from './routes/finance';
 import purchasesRoutes from './routes/purchases';
@@ -27,24 +29,36 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// 404 handler
-app.use((_req, res) => {
-  res.status(404).json({ error: 'Route not found' });
-});
+// Serve frontend if built
+const publicPath = path.join(__dirname, '../public');
+if (fs.existsSync(publicPath)) {
+  app.use(express.static(publicPath));
+  app.get('*', (_req, res) => {
+    res.sendFile(path.join(publicPath, 'index.html'));
+  });
+} else {
+  app.use((_req, res) => {
+    res.status(404).json({ error: 'Route not found' });
+  });
+}
 
-// Error handler
-app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  console.error(err.stack);
-  res.status(500).json({ error: 'Internal server error' });
+// Error handler — preserves status codes set by middleware (400, 422, etc.)
+app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error(err.stack || err.message);
+  const status = err.status || err.statusCode || 500;
+  res.status(status).json({ error: err.message || 'Internal server error' });
 });
 
 async function start() {
   try {
     await initDB();
     console.log('Database initialized');
-    app.listen(PORT, () => {
+    const server = app.listen(PORT, () => {
       console.log(`Finance Wizz backend running on http://localhost:${PORT}`);
     });
+    // Allow up to 10 minutes for AI-heavy requests (PDF parsing + categorization)
+    server.timeout = 10 * 60 * 1000;
+    server.keepAliveTimeout = 10 * 60 * 1000;
   } catch (err) {
     console.error('Failed to start server:', err);
     process.exit(1);
